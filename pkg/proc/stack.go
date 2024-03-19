@@ -346,6 +346,12 @@ func (it *stackIterator) newStackframe(ret, retaddr uint64) Stackframe {
 			r.Call.File, r.Call.Line = r.Current.Fn.cu.lineInfo.PCToLine(r.Current.Fn.Entry, it.pc-1)
 		}
 	}
+	if it.sigret {
+		it.regs.Reg(it.regs.SPRegNum).Uint64Val = it.regs.Reg(it.regs.SPRegNum).Uint64Val + 16
+        	logger := logflags.StackLogger()
+                logger.Debugf("\tBP %x SP  -> %#x", it.regs.Reg(it.regs.BPRegNum).Uint64Val, it.regs.Reg(it.regs.SPRegNum).Uint64Val)
+
+	}
 	return r
 }
 
@@ -480,7 +486,10 @@ func (it *stackIterator) advanceRegs() (callFrameRegs op.DwarfRegisters, ret uin
 	// implicit.
 	// See also the comment in dwarf2_frame_default_init in
 	// $GDB_SOURCE/dwarf2/frame.c
+                logger.Debugf("\t489 cfa %x BP %x SP  -> %#x", it.regs.CFA, it.regs.Reg(it.regs.BPRegNum).Uint64Val, it.regs.Reg(it.regs.SPRegNum).Uint64Val)
+                logger.Debugf("\t489 cfareg %x CFA %x ", cfareg.Uint64Val, it.regs.CFA)
 	callFrameRegs.AddReg(callFrameRegs.SPRegNum, cfareg)
+                logger.Debugf("\t491 cfa %x  BP %x SP  -> %#x",it.regs.CFA, it.regs.Reg(it.regs.BPRegNum).Uint64Val, it.regs.Reg(it.regs.SPRegNum).Uint64Val)
 
 	for i, regRule := range framectx.Regs {
 		if logflags.Stack() {
@@ -517,6 +526,9 @@ func (it *stackIterator) advanceRegs() (callFrameRegs op.DwarfRegisters, ret uin
 						it.err = err
 					}
 					binary.Read(bytes.NewReader(buf), binary.LittleEndian, &ret)
+                logger.Debugf("\t527 BP %x SP  -> %#x", it.regs.Reg(it.regs.BPRegNum).Uint64Val, it.regs.Reg(it.regs.SPRegNum).Uint64Val)
+                it.regs.Reg(it.regs.BPRegNum).Uint64Val = uint64(it.regs.CFA + 16)
+
 				}
 			}
 			retaddr = uint64(it.regs.CFA + regRule.Offset)
@@ -528,6 +540,7 @@ func (it *stackIterator) advanceRegs() (callFrameRegs op.DwarfRegisters, ret uin
 			ret = it.regs.Reg(it.regs.LRRegNum).Uint64Val
 		}
 	}
+                logger.Debugf("\t537 BP %x SP  -> %#x", it.regs.Reg(it.regs.BPRegNum).Uint64Val, it.regs.Reg(it.regs.SPRegNum).Uint64Val)
 
 	return callFrameRegs, ret, retaddr
 }
