@@ -444,6 +444,7 @@ func (d *Debugger) FunctionReturnLocations(fnName string) ([]uint64, error) {
 		for _, instruction := range instructions {
 			if instruction.IsRet() {
 				addrs = append(addrs, instruction.Loc.PC)
+				//fmt.Printf("appending PC %x to return breakpoint list\n",instruction.Loc.PC)
 			}
 		}
 		addrs = append(addrs, proc.FindDeferReturnCalls(instructions)...)
@@ -916,6 +917,8 @@ func copyLogicalBreakpointInfo(lbp *proc.LogicalBreakpoint, requested *api.Break
 	lbp.LoadArgs = api.LoadConfigToProc(requested.LoadArgs)
 	lbp.LoadLocals = api.LoadConfigToProc(requested.LoadLocals)
 	lbp.UserData = requested.UserData
+	lbp.RootFuncName = requested.RootFuncName
+	lbp.TraceFollowCalls = requested.TraceFollowCalls
 	lbp.Cond = nil
 	if requested.Cond != "" {
 		var err error
@@ -1453,7 +1456,7 @@ func uniq(s []string) []string {
 }
 
 // Functions returns a list of functions in the target process.
-func (d *Debugger) Functions(filter string) ([]string, error) {
+func (d *Debugger) Functions(filter string, followCalls int) ([]string, error) {
 	d.targetMutex.Lock()
 	defer d.targetMutex.Unlock()
 
@@ -1467,13 +1470,191 @@ func (d *Debugger) Functions(filter string) ([]string, error) {
 	for t.Next() {
 		for _, f := range t.BinInfo().Functions {
 			if regex.MatchString(f.Name) {
-				funcs = append(funcs, f.Name)
+				if followCalls > 0 {
+					newfuncs, err := traverse(t, &f, 1, followCalls)
+					if err != nil {
+						return nil, fmt.Errorf("traverse failed with error %w", err)
+					}
+					funcs = append(funcs, newfuncs...)
+				} else {
+					funcs = append(funcs, f.Name)
+				}
 			}
 		}
 	}
 	sort.Strings(funcs)
 	funcs = uniq(funcs)
+	/*
+		for _, eachf := range funcs {
+			fmt.Printf("Tracing %s\n",eachf)
+		}
+	*/
 	return funcs, nil
+}
+
+type TraceFunc struct {
+	Func    *proc.Function
+	Depth   int
+	Weight  int
+	visited bool
+	cached  bool
+	//children map[string][]TraceFuncptr
+	children []*proc.Function
+}
+type TraceFuncptr *TraceFunc
+
+var TraceMap = make(map[string]TraceFuncptr)
+
+func filter(fname string) bool {
+	idx := strings.Index(fname, "runtime.")
+	idx2 := strings.Index(fname, "runtime.defer")
+	idx3 := strings.Index(fname, "runtime.gorecover")
+	idx4 := strings.Index(fname, "runtime.gopanic") // gopanic
+	if idx != -1 && idx2 == -1 && idx3 == -1 && idx4 == -1 {
+		// Except defer functions do not traverse runtime.* functions
+		//fmt.Printf("skipping %s\n",fname)
+		return false
+	}
+	return true
+}
+func traverse(t proc.ValidTargets, f *proc.Function, depth int, FollowCalls int) ([]string, error) {
+
+	if filter(f.Name) == false {
+		return nil, nil
+	}
+
+	/*idx1 := strings.Index(f.Name, "runtime.gc")
+	idx2 := strings.Index(f.Name, "runtime.morestack")
+	idx3 := strings.Index(f.Name, "runtime.free")
+	if idx1 != -1 || idx2 != -1 || idx3 != -1 {
+		// Except defer functions do not traverse runtime.* functions
+		fmt.Printf("skipping %s\n", f.Name)
+		return nil, nil
+	}
+	*/
+
+	funcs := []string{}
+	if depth > FollowCalls {
+		//            fmt.Printf("depth %d followcalls %d returning\n", depth, FollowCalls)
+		return nil, nil
+	}
+
+	mapnode := TraceMap[f.Name]
+	fmt.Printf("traverse %s depth %d followcalls %d\n", f.Name, depth, FollowCalls)
+	if mapnode == nil {
+		mapnode = &TraceFunc{Func: new(proc.Function), Weight: FollowCalls - depth, Depth: depth, children: []*proc.Function{}, visited: false, cached: false}
+		mapnode.Func = f
+		TraceMap[f.Name] = mapnode
+		//		fmt.Printf("creating map entry %s %s\n",f.Name, TraceMap[f.Name].Func.Name)
+	} /* else {
+		fmt.Printf("mapnode %s is not nil children %p\n",mapnode.Func.Name,mapnode.children)
+	}*/
+	// may need to add a condition to check whether it has been seen
+	if mapnode.visited == false {
+		//	fmt.Printf("appending  1535 %s to list \n", mapnode.Func.Name)
+		funcs = append(funcs, f.Name) // duplicate in case A->D
+		mapnode.visited = true
+	}
+
+	// no point in disassembling if we are not traversing child
+	if depth+1 > FollowCalls {
+		//	fmt.Printf("depth+1 %d followcalls %d returning\n", depth+1, FollowCalls)
+		return funcs, nil
+	}
+	Budget := FollowCalls - (depth + 1)
+	if TraceMap[f.Name].cached == false {
+		fmt.Printf("disassembling for function %s\n", f.Name)
+		text, err := proc.Disassemble(t.Memory(), nil, t.Breakpoints(), t.BinInfo(), f.Entry, f.End)
+		if err != nil {
+			return nil, fmt.Errorf("disassemble failed with error %w", err)
+		}
+		for _, instr := range text {
+			if instr.IsCall() && instr.DestLoc != nil && instr.DestLoc.Fn != nil {
+				cf := instr.DestLoc.Fn
+				if filter(cf.Name) == false {
+					continue
+				}
+				childnode := TraceMap[cf.Name]
+				if childnode == nil {
+					childnode = &TraceFunc{Func: new(proc.Function), Weight: Budget, Depth: mapnode.Depth + 1, children: []*proc.Function{}, visited: false, cached: false}
+					childnode.Func = cf
+					TraceMap[cf.Name] = childnode
+					TraceMap[f.Name].children = append(TraceMap[f.Name].children, cf)
+					fmt.Printf("appending  child %s to trace parent %s\n", cf.Name, mapnode.Func.Name)
+
+				} else {
+					if childnode.Weight > Budget || childnode.Depth < mapnode.Depth+1 {
+						//		fmt.Printf("no more budget wight %d depth %d %s\n",childnode.Weight, childnode.Depth, cf.Name)
+						continue
+					}
+					if Budget > childnode.Weight {
+						// update depth here?
+						if childnode.Depth > mapnode.Depth+1 {
+							childnode.Depth = mapnode.Depth + 1
+						}
+						fmt.Printf("mapnode %s depth %d child depth %d\n", f.Name, mapnode.Depth, childnode.Depth)
+						fmt.Printf("updating child weight orig: %d", childnode.Weight)
+						childnode.Weight = Budget
+						fmt.Printf(" to %d depth: %d\n", Budget, childnode.Depth)
+						fmt.Printf("appending  child %s to trace parent %s\n", cf.Name, mapnode.Func.Name)
+						TraceMap[f.Name].children = append(TraceMap[f.Name].children, cf)
+					}
+				}
+			}
+		}
+		TraceMap[f.Name].cached = true
+	} /*else {
+		//	fmt.Printf("mapnode already disassembled %s\n", f.Name)
+			for _, cf := range TraceMap[f.Name].children {
+				childnode := TraceMap[cf.Name]
+				if childnode.Weight > Budget {
+					//		fmt.Printf("no more budget wight %d depth %d %s\n",childnode.Weight, childnode.Depth, cf.Name)
+	                                             continue
+	                        }
+	                        if Budget > childnode.Weight {
+					// update depth here?
+					fmt.Printf("mapnode %s depth %d child depth %d\n",f.Name, mapnode.Depth, childnode.Depth)
+							fmt.Printf("updating child weight orig: %d", childnode.Weight)
+	                                     childnode.Weight=Budget
+	                                    TraceMap[f.Name].children = append(TraceMap[f.Name].children, cf)
+							fmt.Printf(" to %d depth: %d\n", Budget, childnode.Depth)
+			fmt.Printf("appending  child %s to trace \n", cf.Name)
+	                        }
+			}
+
+		}*/
+	fmt.Printf("Traversing parent %s's children: \n", f.Name)
+	for _, childFunc := range TraceMap[f.Name].children {
+		if childFunc.Name == f.Name {
+			//fmt.Printf("child name %s\n", childFunc.Name)
+			continue
+		}
+		childnode := TraceMap[childFunc.Name]
+
+		if childnode.Depth <= FollowCalls {
+			children, err := traverse(t, childnode.Func, childnode.Depth, FollowCalls)
+			if err != nil {
+				return nil, fmt.Errorf("traverse failed with error %w", err)
+			}
+			funcs = append(funcs, children...)
+		}
+	}
+
+	// The following code is needed to include defer function calls as they are invoked via funcname.func1 type
+	// naming, so check if funcname is a prefix in candidate function to include such functions
+	/*
+		for _, fbinary := range t.BinInfo().Functions {
+			if depth <= FollowCalls && strings.HasPrefix(fbinary.Name, f.Name) && fbinary.Name != f.Name {
+				children, err := traverse(t, &fbinary, depth, FollowCalls)
+				if err != nil {
+					return nil, fmt.Errorf("traverse failed with error %w", err)
+				}
+				funcs = append(funcs, children...)
+			}
+		}
+	*/
+	return funcs, nil
+
 }
 
 // Types returns all type information in the binary.

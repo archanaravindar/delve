@@ -286,6 +286,10 @@ func GetG(thread Thread) (*G, error) {
 		g, err = curgvar.parseG()
 		if err != nil {
 			if _, ok := err.(ErrNoGoroutine); ok {
+				/*fmt.Printf("Error at location:")
+				loc, _ := thread.Location()
+				fmt.Printf("function location %s:%d\n", loc.Fn.Name, loc.Line)
+				*/
 				err = ErrNoGoroutine{thread.ThreadID()}
 			}
 			return nil, err
