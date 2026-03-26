@@ -1390,6 +1390,7 @@ func TestTraceEBPF4(t *testing.T) {
 	}
 }
 
+
 func TestTraceBackendParity(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("CI") == "true" {
@@ -1535,6 +1536,396 @@ func TestTraceEBPFTypes(t *testing.T) {
 			t.Fatalf("expected slice address value in output, got:\n%s", string(output))
 		}
 	})
+}
+
+func TestTraceVerbosityBackendParityLevel0(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("CI") == "true" {
+		t.Skip("cannot run test in CI, requires kernel compiled with btf support")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("not implemented on non linux/amd64 systems")
+	}
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 16) {
+		t.Skip("requires at least Go 1.16 to run test")
+	}
+	usr, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usr.Uid != "0" {
+		t.Skip("test must be run as root")
+	}
+
+	dlvbin := protest.GetDlvBinaryEBPF(t)
+	fixtures := protest.FindFixturesDir()
+	fixturePath := filepath.Join(fixtures, "ebpf_trace_verbose.go")
+	tmpDir := t.TempDir()
+
+	// Run trace with ptrace backend at verbosity level 0
+	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
+		"--trace-verbose", "0", fixturePath, "main.testPrimitives")
+	ptraceStderr, err := ptraceCmd.StderrPipe()
+	assertNoError(err, t, "ptrace stderr pipe")
+	defer ptraceStderr.Close()
+
+	assertNoError(ptraceCmd.Start(), t, "running ptrace trace")
+	ptraceOutput, err := io.ReadAll(ptraceStderr)
+	assertNoError(err, t, "reading ptrace output")
+	ptraceCmd.Wait()
+
+	if len(ptraceOutput) == 0 {
+		t.Fatal("ptrace backend produced no output")
+	}
+
+	// Run trace with eBPF backend at verbosity level 0
+	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
+		"--trace-verbose", "0", fixturePath, "main.testPrimitives")
+	ebpfStderr, err := ebpfCmd.StderrPipe()
+	assertNoError(err, t, "ebpf stderr pipe")
+	defer ebpfStderr.Close()
+
+	assertNoError(ebpfCmd.Start(), t, "running ebpf trace")
+	ebpfOutput, err := io.ReadAll(ebpfStderr)
+	assertNoError(err, t, "reading ebpf output")
+	ebpfCmd.Wait()
+
+	if len(ebpfOutput) == 0 {
+		t.Fatal("ebpf backend produced no output")
+	}
+
+	// Filter out process exit messages which contain different PIDs
+	filterProcessExitLines := func(output []byte) []byte {
+		lines := bytes.Split(output, []byte("\n"))
+		var filtered [][]byte
+		for _, line := range lines {
+			if !bytes.HasPrefix(line, []byte("Process ")) || !bytes.Contains(line, []byte("has exited with status")) {
+				filtered = append(filtered, line)
+			}
+		}
+		return bytes.Join(filtered, []byte("\n"))
+	}
+
+	ptraceFiltered := filterProcessExitLines(ptraceOutput)
+	ebpfFiltered := filterProcessExitLines(ebpfOutput)
+
+	// Compare outputs byte-for-byte
+	if !bytes.Equal(ptraceFiltered, ebpfFiltered) {
+		t.Fatalf("Output mismatch between ptrace and ebpf backends at verbosity level 0:\n\nPtrace output:\n%s\n\neBPF output:\n%s",
+			string(ptraceOutput), string(ebpfOutput))
+	}
+}
+
+func TestTraceVerbosityBackendParityLevel1(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("CI") == "true" {
+		t.Skip("cannot run test in CI, requires kernel compiled with btf support")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("not implemented on non linux/amd64 systems")
+	}
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 16) {
+		t.Skip("requires at least Go 1.16 to run test")
+	}
+	usr, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usr.Uid != "0" {
+		t.Skip("test must be run as root")
+	}
+
+	dlvbin := protest.GetDlvBinaryEBPF(t)
+	fixtures := protest.FindFixturesDir()
+	fixturePath := filepath.Join(fixtures, "ebpf_trace_verbose.go")
+	tmpDir := t.TempDir()
+
+	// Run trace with ptrace backend at verbosity level 1
+	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
+		"--trace-verbose", "1", fixturePath, "main.testPrimitives")
+	ptraceStderr, err := ptraceCmd.StderrPipe()
+	assertNoError(err, t, "ptrace stderr pipe")
+	defer ptraceStderr.Close()
+
+	assertNoError(ptraceCmd.Start(), t, "running ptrace trace")
+	ptraceOutput, err := io.ReadAll(ptraceStderr)
+	assertNoError(err, t, "reading ptrace output")
+	ptraceCmd.Wait()
+
+	if len(ptraceOutput) == 0 {
+		t.Fatal("ptrace backend produced no output")
+	}
+
+	// Run trace with eBPF backend at verbosity level 1
+	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
+		"--trace-verbose", "1", fixturePath, "main.testPrimitives")
+	ebpfStderr, err := ebpfCmd.StderrPipe()
+	assertNoError(err, t, "ebpf stderr pipe")
+	defer ebpfStderr.Close()
+
+	assertNoError(ebpfCmd.Start(), t, "running ebpf trace")
+	ebpfOutput, err := io.ReadAll(ebpfStderr)
+	assertNoError(err, t, "reading ebpf output")
+	ebpfCmd.Wait()
+
+	if len(ebpfOutput) == 0 {
+		t.Fatal("ebpf backend produced no output")
+	}
+
+	// Filter out process exit messages
+	filterProcessExitLines := func(output []byte) []byte {
+		lines := bytes.Split(output, []byte("\n"))
+		var filtered [][]byte
+		for _, line := range lines {
+			if !bytes.HasPrefix(line, []byte("Process ")) || !bytes.Contains(line, []byte("has exited with status")) {
+				filtered = append(filtered, line)
+			}
+		}
+		return bytes.Join(filtered, []byte("\n"))
+	}
+
+	ptraceFiltered := filterProcessExitLines(ptraceOutput)
+	ebpfFiltered := filterProcessExitLines(ebpfOutput)
+
+	// Compare outputs byte-for-byte
+	if !bytes.Equal(ptraceFiltered, ebpfFiltered) {
+		t.Fatalf("Output mismatch between ptrace and ebpf backends at verbosity level 1:\n\nPtrace output:\n%s\n\neBPF output:\n%s",
+			string(ptraceOutput), string(ebpfOutput))
+	}
+}
+
+func TestTraceVerbosityBackendParityLevel2(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("CI") == "true" {
+		t.Skip("cannot run test in CI, requires kernel compiled with btf support")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("not implemented on non linux/amd64 systems")
+	}
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 16) {
+		t.Skip("requires at least Go 1.16 to run test")
+	}
+	usr, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usr.Uid != "0" {
+		t.Skip("test must be run as root")
+	}
+
+	dlvbin := protest.GetDlvBinaryEBPF(t)
+	fixtures := protest.FindFixturesDir()
+	fixturePath := filepath.Join(fixtures, "ebpf_trace_verbose.go")
+	tmpDir := t.TempDir()
+
+	// Run trace with ptrace backend at verbosity level 2
+	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
+		"--trace-verbose", "2", fixturePath, "main.testMixed")
+	ptraceStderr, err := ptraceCmd.StderrPipe()
+	assertNoError(err, t, "ptrace stderr pipe")
+	defer ptraceStderr.Close()
+
+	assertNoError(ptraceCmd.Start(), t, "running ptrace trace")
+	ptraceOutput, err := io.ReadAll(ptraceStderr)
+	assertNoError(err, t, "reading ptrace output")
+	ptraceCmd.Wait()
+
+	if len(ptraceOutput) == 0 {
+		t.Fatal("ptrace backend produced no output")
+	}
+
+	// Run trace with eBPF backend at verbosity level 2
+	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
+		"--trace-verbose", "2", fixturePath, "main.testMixed")
+	ebpfStderr, err := ebpfCmd.StderrPipe()
+	assertNoError(err, t, "ebpf stderr pipe")
+	defer ebpfStderr.Close()
+
+	assertNoError(ebpfCmd.Start(), t, "running ebpf trace")
+	ebpfOutput, err := io.ReadAll(ebpfStderr)
+	assertNoError(err, t, "reading ebpf output")
+	ebpfCmd.Wait()
+
+	if len(ebpfOutput) == 0 {
+		t.Fatal("ebpf backend produced no output")
+	}
+
+	// Filter out process exit messages
+	filterProcessExitLines := func(output []byte) []byte {
+		lines := bytes.Split(output, []byte("\n"))
+		var filtered [][]byte
+		for _, line := range lines {
+			if !bytes.HasPrefix(line, []byte("Process ")) || !bytes.Contains(line, []byte("has exited with status")) {
+				filtered = append(filtered, line)
+			}
+		}
+		return bytes.Join(filtered, []byte("\n"))
+	}
+
+	ptraceFiltered := filterProcessExitLines(ptraceOutput)
+	ebpfFiltered := filterProcessExitLines(ebpfOutput)
+
+	// Compare outputs byte-for-byte
+	if !bytes.Equal(ptraceFiltered, ebpfFiltered) {
+		t.Fatalf("Output mismatch between ptrace and ebpf backends at verbosity level 2:\n\nPtrace output:\n%s\n\neBPF output:\n%s",
+			string(ptraceOutput), string(ebpfOutput))
+	}
+}
+
+func TestTraceVerbosityBackendParityLevel3(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("CI") == "true" {
+		t.Skip("cannot run test in CI, requires kernel compiled with btf support")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("not implemented on non linux/amd64 systems")
+	}
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 16) {
+		t.Skip("requires at least Go 1.16 to run test")
+	}
+	usr, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usr.Uid != "0" {
+		t.Skip("test must be run as root")
+	}
+
+	dlvbin := protest.GetDlvBinaryEBPF(t)
+	fixtures := protest.FindFixturesDir()
+	fixturePath := filepath.Join(fixtures, "ebpf_trace_verbose.go")
+	tmpDir := t.TempDir()
+
+	// Run trace with ptrace backend at verbosity level 3
+	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
+		"--trace-verbose", "3", fixturePath, "main.testMixed")
+	ptraceStderr, err := ptraceCmd.StderrPipe()
+	assertNoError(err, t, "ptrace stderr pipe")
+	defer ptraceStderr.Close()
+
+	assertNoError(ptraceCmd.Start(), t, "running ptrace trace")
+	ptraceOutput, err := io.ReadAll(ptraceStderr)
+	assertNoError(err, t, "reading ptrace output")
+	ptraceCmd.Wait()
+
+	if len(ptraceOutput) == 0 {
+		t.Fatal("ptrace backend produced no output")
+	}
+
+	// Run trace with eBPF backend at verbosity level 3
+	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
+		"--trace-verbose", "3", fixturePath, "main.testMixed")
+	ebpfStderr, err := ebpfCmd.StderrPipe()
+	assertNoError(err, t, "ebpf stderr pipe")
+	defer ebpfStderr.Close()
+
+	assertNoError(ebpfCmd.Start(), t, "running ebpf trace")
+	ebpfOutput, err := io.ReadAll(ebpfStderr)
+	assertNoError(err, t, "reading ebpf output")
+	ebpfCmd.Wait()
+
+	if len(ebpfOutput) == 0 {
+		t.Fatal("ebpf backend produced no output")
+	}
+
+	// Filter out process exit messages
+	filterProcessExitLines := func(output []byte) []byte {
+		lines := bytes.Split(output, []byte("\n"))
+		var filtered [][]byte
+		for _, line := range lines {
+			if !bytes.HasPrefix(line, []byte("Process ")) || !bytes.Contains(line, []byte("has exited with status")) {
+				filtered = append(filtered, line)
+			}
+		}
+		return bytes.Join(filtered, []byte("\n"))
+	}
+
+	ptraceFiltered := filterProcessExitLines(ptraceOutput)
+	ebpfFiltered := filterProcessExitLines(ebpfOutput)
+
+	// Compare outputs byte-for-byte
+	if !bytes.Equal(ptraceFiltered, ebpfFiltered) {
+		t.Fatalf("Output mismatch between ptrace and ebpf backends at verbosity level 3:\n\nPtrace output:\n%s\n\neBPF output:\n%s",
+			string(ptraceOutput), string(ebpfOutput))
+	}
+}
+
+func TestTraceVerbosityBackendParityLevel4(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("CI") == "true" {
+		t.Skip("cannot run test in CI, requires kernel compiled with btf support")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("not implemented on non linux/amd64 systems")
+	}
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 16) {
+		t.Skip("requires at least Go 1.16 to run test")
+	}
+	usr, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usr.Uid != "0" {
+		t.Skip("test must be run as root")
+	}
+
+	dlvbin := protest.GetDlvBinaryEBPF(t)
+	fixtures := protest.FindFixturesDir()
+	fixturePath := filepath.Join(fixtures, "ebpf_trace_verbose.go")
+	tmpDir := t.TempDir()
+
+	// Run trace with ptrace backend at verbosity level 4
+	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
+		"--trace-verbose", "4", fixturePath, "main.testIntegerTypes")
+	ptraceStderr, err := ptraceCmd.StderrPipe()
+	assertNoError(err, t, "ptrace stderr pipe")
+	defer ptraceStderr.Close()
+
+	assertNoError(ptraceCmd.Start(), t, "running ptrace trace")
+	ptraceOutput, err := io.ReadAll(ptraceStderr)
+	assertNoError(err, t, "reading ptrace output")
+	ptraceCmd.Wait()
+
+	if len(ptraceOutput) == 0 {
+		t.Fatal("ptrace backend produced no output")
+	}
+
+	// Run trace with eBPF backend at verbosity level 4
+	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
+		"--trace-verbose", "4", fixturePath, "main.testIntegerTypes")
+	ebpfStderr, err := ebpfCmd.StderrPipe()
+	assertNoError(err, t, "ebpf stderr pipe")
+	defer ebpfStderr.Close()
+
+	assertNoError(ebpfCmd.Start(), t, "running ebpf trace")
+	ebpfOutput, err := io.ReadAll(ebpfStderr)
+	assertNoError(err, t, "reading ebpf output")
+	ebpfCmd.Wait()
+
+	if len(ebpfOutput) == 0 {
+		t.Fatal("ebpf backend produced no output")
+	}
+
+	// Filter out process exit messages
+	filterProcessExitLines := func(output []byte) []byte {
+		lines := bytes.Split(output, []byte("\n"))
+		var filtered [][]byte
+		for _, line := range lines {
+			if !bytes.HasPrefix(line, []byte("Process ")) || !bytes.Contains(line, []byte("has exited with status")) {
+				filtered = append(filtered, line)
+			}
+		}
+		return bytes.Join(filtered, []byte("\n"))
+	}
+
+	ptraceFiltered := filterProcessExitLines(ptraceOutput)
+	ebpfFiltered := filterProcessExitLines(ebpfOutput)
+
+	// Compare outputs byte-for-byte
+	if !bytes.Equal(ptraceFiltered, ebpfFiltered) {
+		t.Fatalf("Output mismatch between ptrace and ebpf backends at verbosity level 4:\n\nPtrace output:\n%s\n\neBPF output:\n%s",
+			string(ptraceOutput), string(ebpfOutput))
+	}
 }
 
 func TestDlvTestChdir(t *testing.T) {
