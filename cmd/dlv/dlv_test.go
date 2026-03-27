@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1390,7 +1389,6 @@ func TestTraceEBPF4(t *testing.T) {
 	}
 }
 
-
 func TestTraceBackendParity(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("CI") == "true" {
@@ -1466,78 +1464,6 @@ func TestTraceBackendParity(t *testing.T) {
 	}
 }
 
-func TestTraceEBPFTypes(t *testing.T) {
-	t.Parallel()
-	if os.Getenv("CI") == "true" {
-		t.Skip("cannot run test in CI, requires kernel compiled with btf support")
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("not implemented on non linux/amd64 systems")
-	}
-	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 16) {
-		t.Skip("requires at least Go 1.16 to run test")
-	}
-	usr, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if usr.Uid != "0" {
-		t.Skip("test must be run as root")
-	}
-
-	dlvbin := protest.GetDlvBinaryEBPF(t)
-	fixtures := protest.FindFixturesDir()
-
-	runEBPFTrace := func(t *testing.T, funcName string) []byte {
-		t.Helper()
-		cmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(t.TempDir(), "__debug"), filepath.Join(fixtures, "ebpf_trace_types.go"), funcName)
-		rdr, err := cmd.StderrPipe()
-		assertNoError(err, t, "stderr pipe")
-		defer rdr.Close()
-
-		assertNoError(cmd.Start(), t, "running trace")
-		output, err := io.ReadAll(rdr)
-		assertNoError(err, t, "ReadAll")
-		cmd.Wait()
-		return output
-	}
-
-	// Test small integer types (int8, uint16, int32) to verify correct byte sizes
-	t.Run("SmallInts", func(t *testing.T) {
-		t.Parallel()
-		output := runEBPFTrace(t, "main.tracedSmallInts")
-		if !bytes.Contains(output, []byte("7")) || !bytes.Contains(output, []byte("1000")) || !bytes.Contains(output, []byte("-42")) {
-			t.Fatalf("expected small int values in output, got:\n%s", string(output))
-		}
-	})
-
-	// Test pointer types
-	t.Run("Pointers", func(t *testing.T) {
-		t.Parallel()
-		output := runEBPFTrace(t, "main.tracedPointer")
-		if bytes.Contains(output, []byte("type not supported")) {
-			t.Fatalf("pointer type should be supported, got:\n%s", string(output))
-		}
-		addrRe := regexp.MustCompile(`main\.tracedPointer\([1-9][0-9]*`)
-		if !addrRe.Match(output) {
-			t.Fatalf("expected pointer address values in output, got:\n%s", string(output))
-		}
-	})
-
-	// Test slice types
-	t.Run("Slices", func(t *testing.T) {
-		t.Parallel()
-		output := runEBPFTrace(t, "main.tracedSlice")
-		if bytes.Contains(output, []byte("type not supported")) {
-			t.Fatalf("slice type should be supported, got:\n%s", string(output))
-		}
-		sliceRe := regexp.MustCompile(`main\.tracedSlice\([1-9][0-9]*`)
-		if !sliceRe.Match(output) {
-			t.Fatalf("expected slice address value in output, got:\n%s", string(output))
-		}
-	})
-}
-
 func TestTraceVerbosityBackendParityLevel0(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("CI") == "true" {
@@ -1563,8 +1489,9 @@ func TestTraceVerbosityBackendParityLevel0(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Run trace with ptrace backend at verbosity level 0
+	// Test primitives and small integer types
 	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
-		"--trace-verbose", "0", fixturePath, "main.testPrimitives")
+		"--trace-verbose", "0", fixturePath, "main.testPrimitives", "main.testIntegerTypes")
 	ptraceStderr, err := ptraceCmd.StderrPipe()
 	assertNoError(err, t, "ptrace stderr pipe")
 	defer ptraceStderr.Close()
@@ -1579,8 +1506,9 @@ func TestTraceVerbosityBackendParityLevel0(t *testing.T) {
 	}
 
 	// Run trace with eBPF backend at verbosity level 0
+	// Test primitives and small integer types
 	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
-		"--trace-verbose", "0", fixturePath, "main.testPrimitives")
+		"--trace-verbose", "0", fixturePath, "main.testPrimitives", "main.testIntegerTypes")
 	ebpfStderr, err := ebpfCmd.StderrPipe()
 	assertNoError(err, t, "ebpf stderr pipe")
 	defer ebpfStderr.Close()
@@ -1641,8 +1569,9 @@ func TestTraceVerbosityBackendParityLevel1(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Run trace with ptrace backend at verbosity level 1
+	// Test primitives and pointer types
 	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
-		"--trace-verbose", "1", fixturePath, "main.testPrimitives")
+		"--trace-verbose", "1", fixturePath, "main.testPrimitives", "main.testPointers")
 	ptraceStderr, err := ptraceCmd.StderrPipe()
 	assertNoError(err, t, "ptrace stderr pipe")
 	defer ptraceStderr.Close()
@@ -1657,8 +1586,9 @@ func TestTraceVerbosityBackendParityLevel1(t *testing.T) {
 	}
 
 	// Run trace with eBPF backend at verbosity level 1
+	// Test primitives and pointer types
 	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
-		"--trace-verbose", "1", fixturePath, "main.testPrimitives")
+		"--trace-verbose", "1", fixturePath, "main.testPrimitives", "main.testPointers")
 	ebpfStderr, err := ebpfCmd.StderrPipe()
 	assertNoError(err, t, "ebpf stderr pipe")
 	defer ebpfStderr.Close()
@@ -1719,8 +1649,9 @@ func TestTraceVerbosityBackendParityLevel2(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Run trace with ptrace backend at verbosity level 2
+	// Test mixed types (small ints, pointers) and slice types
 	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
-		"--trace-verbose", "2", fixturePath, "main.testMixed")
+		"--trace-verbose", "2", fixturePath, "main.testMixed", "main.testSlices")
 	ptraceStderr, err := ptraceCmd.StderrPipe()
 	assertNoError(err, t, "ptrace stderr pipe")
 	defer ptraceStderr.Close()
@@ -1735,8 +1666,9 @@ func TestTraceVerbosityBackendParityLevel2(t *testing.T) {
 	}
 
 	// Run trace with eBPF backend at verbosity level 2
+	// Test mixed types (small ints, pointers) and slice types
 	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
-		"--trace-verbose", "2", fixturePath, "main.testMixed")
+		"--trace-verbose", "2", fixturePath, "main.testMixed", "main.testSlices")
 	ebpfStderr, err := ebpfCmd.StderrPipe()
 	assertNoError(err, t, "ebpf stderr pipe")
 	defer ebpfStderr.Close()
@@ -1797,8 +1729,9 @@ func TestTraceVerbosityBackendParityLevel3(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Run trace with ptrace backend at verbosity level 3
+	// Test mixed types and small unsigned integer types
 	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
-		"--trace-verbose", "3", fixturePath, "main.testMixed")
+		"--trace-verbose", "3", fixturePath, "main.testMixed", "main.testUnsignedTypes")
 	ptraceStderr, err := ptraceCmd.StderrPipe()
 	assertNoError(err, t, "ptrace stderr pipe")
 	defer ptraceStderr.Close()
@@ -1813,8 +1746,9 @@ func TestTraceVerbosityBackendParityLevel3(t *testing.T) {
 	}
 
 	// Run trace with eBPF backend at verbosity level 3
+	// Test mixed types and small unsigned integer types
 	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
-		"--trace-verbose", "3", fixturePath, "main.testMixed")
+		"--trace-verbose", "3", fixturePath, "main.testMixed", "main.testUnsignedTypes")
 	ebpfStderr, err := ebpfCmd.StderrPipe()
 	assertNoError(err, t, "ebpf stderr pipe")
 	defer ebpfStderr.Close()
@@ -1875,8 +1809,9 @@ func TestTraceVerbosityBackendParityLevel4(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Run trace with ptrace backend at verbosity level 4
+	// Comprehensive test: all newly supported types (small ints, pointers, slices, mixed)
 	ptraceCmd := exec.Command(dlvbin, "trace", "--output", filepath.Join(tmpDir, "__debug_ptrace"),
-		"--trace-verbose", "4", fixturePath, "main.testIntegerTypes")
+		"--trace-verbose", "4", fixturePath, "main.testIntegerTypes", "main.testPointers", "main.testMixed")
 	ptraceStderr, err := ptraceCmd.StderrPipe()
 	assertNoError(err, t, "ptrace stderr pipe")
 	defer ptraceStderr.Close()
@@ -1891,8 +1826,9 @@ func TestTraceVerbosityBackendParityLevel4(t *testing.T) {
 	}
 
 	// Run trace with eBPF backend at verbosity level 4
+	// Comprehensive test: all newly supported types (small ints, pointers, slices, mixed)
 	ebpfCmd := exec.Command(dlvbin, "trace", "--ebpf", "--output", filepath.Join(tmpDir, "__debug_ebpf"),
-		"--trace-verbose", "4", fixturePath, "main.testIntegerTypes")
+		"--trace-verbose", "4", fixturePath, "main.testIntegerTypes", "main.testPointers", "main.testMixed")
 	ebpfStderr, err := ebpfCmd.StderrPipe()
 	assertNoError(err, t, "ebpf stderr pipe")
 	defer ebpfStderr.Close()
